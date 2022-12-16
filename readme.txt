@@ -1,0 +1,1 @@
+In order for the notebooks to function correctly the files in additional_files/DataSynthesizer_files must be added to the root direcotry of DataSynthesizer and the files in additional_files/private-pgm_files must be added to the root dierectory of private-pgm.
