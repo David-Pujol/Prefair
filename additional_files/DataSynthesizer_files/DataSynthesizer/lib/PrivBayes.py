@@ -7,6 +7,7 @@ from multiprocessing.pool import Pool
 import numpy as np
 from pandas import DataFrame, merge
 from scipy.optimize import fsolve
+from scipy.stats import bernoulli
 
 from DataSynthesizer.lib.utils import mutual_information, normalize_given_distribution, set_random_seed
 
@@ -163,9 +164,9 @@ def greedy_bayes(dataset: DataFrame, k: int, epsilon: float, seed=0):
             mutual_info_list += res[1]
 
         if epsilon:
-            #sampling_distribution = exponential_mechanism(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
+            #sampling_distribution = exponential_mechanism(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary,num_tuples, num_attributes)
             sampling_distribution = permute_flip(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
-        
+            
             idx = np.random.choice(list(range(len(mutual_info_list))), p=sampling_distribution)
         else:
             idx = mutual_info_list.index(max(mutual_info_list))
@@ -176,6 +177,93 @@ def greedy_bayes(dataset: DataFrame, k: int, epsilon: float, seed=0):
         rest_attributes.remove(adding_attribute)
         print(f'Adding attribute {adding_attribute}')
 
+    print('========================== BN constructed ==========================')
+
+    return N
+
+def fair_greedy_bayes(dataset: DataFrame, k: int, epsilon: float, seed=0, sensitive = None):
+    """Construct a Bayesian Network (BN) using greedy algorithm.
+
+    Parameters
+    ----------
+    dataset : DataFrame
+        Input dataset, which only contains categorical attributes.
+    k : int
+        Maximum degree of the constructed BN. If k=0, k is automatically calculated.
+    epsilon : float
+        Parameter of differential privacy.
+    seed : int or float
+        Seed for the randomness in BN generation.
+    """
+    set_random_seed(seed)
+    dataset: DataFrame = dataset.astype(str, copy=False)
+    num_tuples, num_attributes = dataset.shape
+    if not k:
+        k = calculate_k(num_attributes, num_tuples)
+
+    attr_to_is_binary = {attr: dataset[attr].unique().size <= 2 for attr in dataset}
+
+    print('================ Constructing Bayesian Network (BN) ================')
+    admissible_attributes = sensitive["admissible"]
+    outcome_attribute = sensitive["outcome"]
+    rest_attributes = list(dataset.columns)
+    rest_attributes.remove(outcome_attribute[0])
+    root_attribute = random.choice(rest_attributes)
+    rest_attributes.remove(root_attribute)
+    V = [root_attribute]
+    print(f'Adding ROOT {root_attribute}')
+    N = []
+    while rest_attributes:
+        parents_pair_list = []
+        mutual_info_list = []
+
+        num_parents = min(len(V), k)
+        tasks = [(child, V, num_parents, split, dataset) for child, split in
+                 product(rest_attributes, range(len(V) - num_parents + 1))]
+        with Pool() as pool:
+            res_list = pool.map(worker, tasks)
+
+        for res in res_list:
+            parents_pair_list += res[0]
+            mutual_info_list += res[1]
+
+        if epsilon:
+            #sampling_distribution = exponential_mechanism(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
+            sampling_distribution = permute_flip(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
+            idx = np.random.choice(list(range(len(mutual_info_list))), p=sampling_distribution)
+        else:
+            idx = mutual_info_list.index(max(mutual_info_list))
+
+        N.append(parents_pair_list[idx])
+        adding_attribute = parents_pair_list[idx][0]
+        V.append(adding_attribute)
+        rest_attributes.remove(adding_attribute)
+        print(f'Adding attribute {adding_attribute}')
+
+    parents_pair_list = []
+    mutual_info_list = []
+
+    num_parents = min(len(admissible_attributes), k)
+    tasks = [(child, admissible_attributes, num_parents, split, dataset) for child, split in
+             product(outcome_attribute, range(len(admissible_attributes) - num_parents + 1))]
+    with Pool() as pool:
+        res_list = pool.map(worker, tasks)
+
+    for res in res_list:
+        parents_pair_list += res[0]
+        mutual_info_list += res[1]
+
+    if epsilon:
+        #sampling_distribution = exponential_mechanism(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
+        sampling_distribution = permute_flip(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes)
+        idx = np.random.choice(list(range(len(mutual_info_list))), p=sampling_distribution)
+    else:
+        idx = mutual_info_list.index(max(mutual_info_list))
+
+    N.append(parents_pair_list[idx])
+    adding_attribute = parents_pair_list[idx][0]
+    V.append(adding_attribute)
+    print(f'Adding attribute {adding_attribute}')
     print('========================== BN constructed ==========================')
 
     return N
@@ -193,6 +281,7 @@ def exponential_mechanism(epsilon, mutual_info_list, parents_pair_list, attr_to_
     mi_array = np.exp(mi_array)
     mi_array = normalize_given_distribution(mi_array)
     return mi_array
+
 
 def permute_flip(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary, num_tuples, num_attributes):
     delta_array = []
@@ -214,10 +303,11 @@ def permute_flip(epsilon, mutual_info_list, parents_pair_list, attr_to_is_binary
             break
 
     if(sum(dist_array) == 0):
-        print("oops")
         dist_array[random.randint(0,len(dist_array))] = 1
 
     return dist_array
+
+
 
 
 def laplace_noise_parameter(k, num_attributes, num_tuples, epsilon):
